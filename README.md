@@ -256,7 +256,7 @@ checked against outcomes and should not be used as a threshold.
 
 Present: adapter weights, tokenizer, chat template, this README.
 
-Missing, and needed before any claim here is reproducible:
+Missing:
 
 - [ ] training script
 - [ ] evaluation harness (including the regex fallback)
