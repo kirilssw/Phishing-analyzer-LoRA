@@ -270,4 +270,4 @@ Missing:
 ## License
 
 Adapter released under Apache 2.0. The base model `Qwen2.5-7B-Instruct` is Apache 2.0
-(all Qwen2.5 sizes except 3B and 72B are Apache 2.0). The source dataset is MIT.
+The source dataset is MIT.
