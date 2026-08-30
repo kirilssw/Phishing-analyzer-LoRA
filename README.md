@@ -181,9 +181,20 @@ print(json.loads(response))
 }
 ```
 
+## Repository Contents
+
+**Included:** adapter weights (3B and 7B), tokenizer files, chat template, this README, evaluation charts.
+
+**Not included:**
+- Training notebooks / scripts
+- Evaluation harness (the paired McNemar comparison code)
+- Test sets B and C themselves
+- The synthetic BEC/invoice-fraud augmentation generator
+- `datasetv3_2048.jsonl` (training data) — not redistributed here; see Training Data section for the CEAS-08 source
+
 ## License
 
-Adapters released under Apache 2.0. This inherits the base model's license terms — verify the current Qwen2.5 license on Hugging Face before commercial use (see Limitations).
+Adapters released under Apache 2.0. This inherits the base model's license terms — verify the current Qwen2.5 license on Hugging Face before commercial use (see Limitations). The CEAS-08 source dataset's own license was not independently re-verified for this repo; check the linked source before relying on it.
 
 ## Framework Versions
 
