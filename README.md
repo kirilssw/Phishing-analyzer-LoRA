@@ -1,43 +1,39 @@
 # Phishing Analyzer LoRA
 
-QLoRA adapters for `Qwen2.5-Instruct` (3B and 7B variants) that classify emails as phishing or legitimate and return a structured threat analysis (threat type, risk level, indicators, mitigation recommendations) as JSON.
+QLoRA adapters for `Qwen2.5-Instruct` (3B and 7B) that read an email, classify it as phishing or legitimate, and return a structured JSON threat analysis: threat type, risk level, indicators and mitigation recommendations.
 
-This is a portfolio / learning project focused on practical LoRA fine-tuning skills, evaluated as rigorously as the available compute and sample sizes allow — see the **Limitations** section before drawing strong conclusions from any single number below.
+> Learning / portfolio project. Both adapters were evaluated on 75 external emails, and neither was tested against adversarial email. **Do not use this as a security control.** Read [Limitations](#limitations) before drawing conclusions from any number below.
 
-## Repository Structure
+## What this project covers
+
+- QLoRA fine-tuning of 3B and 7B models for structured JSON output (Unsloth, PEFT).
+- A failure mode and its fix: the first adapter caught link and attachment phishing but missed social-engineering attacks (BEC, invoice fraud, impersonation). Targeted synthetic data was added to close this gap.
+- Evaluation on external corpora, with a paired McNemar comparison of four runs over the same items.
+- Non-significant results reported alongside significant ones, with p-values and 95% CIs.
+
+## Repository structure
 
 ```
 .
-├── 3b-adapter/
-│   ├── adapter_config.json
-│   ├── adapter_model.safetensors
-│   ├── tokenizer.json
-│   ├── tokenizer_config.json
-│   └── chat_template.jinja
-├── 7b-adapter/
-│   ├── adapter_config.json
-│   ├── adapter_model.safetensors
-│   ├── tokenizer.json
-│   ├── tokenizer_config.json
-│   └── chat_template.jinja
-├── assets/
-│   ├── pooled_recall_base_vs_trained.png
-│   ├── confusion_matrix_3b.png
-│   └── confusion_matrix_7b.png
+├── 3b-adapter/          # adapter for Qwen2.5-3B-Instruct (see license note below)
+├── 7b-adapter/          # adapter for Qwen2.5-7B-Instruct
+├── assets/              # evaluation charts
+├── inference.py         # analyze one email from a text file
+├── requirements.txt
+├── LICENSE
 └── README.md
 ```
 
-## Model Details
+## Model details
 
 | | 3B adapter | 7B adapter |
 |---|---|---|
 | Base model | `unsloth/Qwen2.5-3B-Instruct-bnb-4bit` | `unsloth/Qwen2.5-7B-Instruct-bnb-4bit` |
+| Base model license | Qwen Research License (non-commercial) | Apache 2.0 |
 | Adapter type | QLoRA (PEFT `LORA`) | QLoRA (PEFT `LORA`) |
-| Rank (r) | 8 | 8 |
-| Alpha | 16 | 16 |
-| Dropout | 0 | 0 |
+| Rank / Alpha / Dropout | 8 / 16 / 0 | 8 / 16 / 0 |
 | Target modules | `q_proj`, `k_proj`, `v_proj`, `o_proj`, `gate_proj`, `up_proj`, `down_proj` | same |
-| Adapter file size | ~58 MB | ~77 MB |
+| Adapter file size | 57 MiB | 77 MiB |
 | Trained with | Unsloth (QLoRA), Google Colab (T4) | Unsloth (QLoRA) |
 | Epochs | 2 | 2 |
 | Context length | 2048 | 2048 |
@@ -45,123 +41,102 @@ This is a portfolio / learning project focused on practical LoRA fine-tuning ski
 | LR scheduler | cosine, `warmup_ratio=0.03` | cosine, `warmup_ratio=0.03` |
 | Weight decay | 0.001 | 0.001 |
 | Train/eval split | `train_test_split(test_size=0.1, seed=3407)` | same |
-| PEFT version | 0.20.0 | 0.20.0 |
+| PEFT version (from `adapter_config.json`) | 0.20.0 | 0.19.1 |
 
-**Note on chat template:** `chat_template.jinja` is the unmodified Qwen2.5 ChatML template — the system prompt used during training/eval is *not* baked in and must be passed explicitly (see below).
+`chat_template.jinja` is the unmodified Qwen2.5 ChatML template. The system prompt from training and evaluation is not part of the template and has to be passed with every request (see [Quick start](#quick-start)).
 
-## Training Data
+## Training data
 
-- Base corpus: [CEAS-08](https://huggingface.co/datasets/nosadaniel/phishing-email-training-dataset), cleaned and combined with synthetic BEC (business email compromise) / invoice-fraud augmentation into `datasetv3_2048.jsonl` — **2,259 rows** after cleaning.
-- Context length was set to 2048 specifically because 1024 tokens truncates and destroys 77–89% of BEC/invoice-fraud examples in this dataset — a shorter context silently drops the exact category the augmentation was meant to fix.
-- **Known dataset bias:** CEAS-08 skews toward phishing with technical artifacts (links, attachments), so without augmentation the model under-detects pure social-engineering attacks (BEC, impersonation). The synthetic augmentation targets this gap but does not fully eliminate it.
+The base corpus is [`nosadaniel/phishing-email-training-dataset`](https://huggingface.co/datasets/nosadaniel/phishing-email-training-dataset) (MIT license per its dataset card), derived from CEAS-08. I cleaned it and combined it with synthetic BEC, invoice-fraud and impersonation examples into `datasetv3_2048.jsonl`, which has 2,259 rows. The file is not redistributed here.
 
-## Evaluation Methodology
+Most label fields are machine-generated. Only the binary ham/phish label comes from CEAS-08. The other fields (`threat_type`, `risk_level`, `indicators`, `analysis_summary`) were written by an LLM when the dataset was built, so this adapter is a distillation of another model's phishing analyses, not a model trained on expert annotations. The threat-type taxonomy also comes from that dataset.
 
-Four models were evaluated on the same two **external** (non-training-distribution) test sets, using an identical, paired evaluation harness:
+Other known issues:
 
-- **Test B** — Nazario Phishing Corpus + Nigerian Fraud corpus + SpamAssassin ham (50 examples: 25 legitimate / 25 phishing).
-- **Test C** — Phishing Pot honeypot corpus, rf-peixoto, CC BY-NC 4.0 (25 examples, **phishing only — no legitimate emails in this set**).
-- Combined pooled evaluation: 75 paired examples.
-- All four runs (base 3B, trained 3B, base 7B, trained 7B) share an identical evaluation fingerprint (`58b9c22ff94898bc68df95722874547d`), confirming the comparison is over the exact same items — this is what makes the paired McNemar test below valid.
-- `FAILURE_IS_WRONG = True`: any parse failure on the base (no-adapter) models counts as an error rather than being excluded, so baseline numbers aren't artificially inflated.
+- The dataset card mentions "200 balanced samples", while the file contains thousands of rows. I have not resolved this.
+- CEAS-08 phishing is dominated by technical artifacts such as links and attachments. Without augmentation the model under-detects pure social engineering. The augmentation reduces this gap but does not remove it.
+- Context length is 2048 because at 1024 tokens, 77–89% of the BEC and invoice-fraud examples were truncated. A shorter context would cut the very category the augmentation targets.
+
+## Evaluation methodology
+
+Four models (base 3B, 3B adapter, base 7B, 7B adapter) went through the same harness on two external test sets.
+
+| Set | Sources | Size |
+|---|---|---|
+| Test B | Nazario Phishing Corpus, Nigerian Fraud corpus, SpamAssassin ham | 50 (25 legitimate, 25 phishing) |
+| Test C | Phishing Pot honeypot corpus (rf-peixoto, CC BY-NC 4.0) | 25, phishing only |
+
+Integrity checks:
+
+- All four runs share the evaluation fingerprint `58b9c22ff94898bc68df95722874547d`, so they cover the same items. The paired McNemar test depends on this.
+- The word "phishing" appeared in Phishing Pot `To:` headers. It was neutralized before inference to prevent label leakage.
+- Raw generations were saved before parsing, so parser bugs could be fixed without re-running inference.
+- With `FAILURE_IS_WRONG = True`, an unparseable output counts as an error. Baselines do not gain accuracy from excluded failures.
 
 ## Results
 
 ![Pooled recall, base vs trained](assets/pooled_recall_base_vs_trained.png)
 
-| Model | Recall (Test B) | FPR (Test B) | Recall (Test C) | Pooled accuracy (n=75) |
-|---|---|---|---|---|
-| base 3B (no adapter) | 0.960 | **0.240** | 0.920 | 0.880 |
-| **3B adapter** | 0.960 | 0.000 | 0.880 | 0.947 |
-| base 7B (no adapter) | 0.920 | 0.000 | 0.560 | 0.827 |
-| **7B adapter** | 1.000 | 0.080 | 0.880 | 0.933 |
-
-The base 3B model misclassified 6 of 25 legitimate emails as phishing (FPR = 0.24) on Test B. After fine-tuning, FPR drops to 0. This is the single clearest, most consistent effect of the adapter across both model sizes.
-
-### Confusion matrices (trained adapters)
+| Model | Recall (Test B) | FPR (Test B) | Balanced acc. (Test B) | Recall (Test C) | Pooled accuracy (n=75) |
+|---|---|---|---|---|---|
+| base 3B | 0.960 | 0.240 | 0.860 | 0.920 | 0.880 |
+| 3B adapter | 0.960 | 0.000 | 0.980 | 0.880 | 0.947 |
+| base 7B | 0.920 | 0.000 | 0.960 | 0.560 | 0.827 |
+| 7B adapter | 1.000 | 0.080 | 0.960 | 0.880 | 0.933 |
 
 | 3B adapter | 7B adapter |
 |---|---|
-| ![Confusion matrix, trained 3B](assets/confusion_matrix_3b.png) | ![Confusion matrix, trained 7B](assets/confusion_matrix_7b.png) |
+| ![Confusion matrix, 3B adapter](assets/confusion_matrix_3b.png) | ![Confusion matrix, 7B adapter](assets/confusion_matrix_7b.png) |
 
-### Statistical comparison (McNemar's exact test, n=75 paired examples)
+### Paired comparison (McNemar exact test, n=75)
 
-| Comparison | Δ accuracy | 95% CI | p-value | Significant? |
+| Comparison | Δ accuracy | 95% CI | p-value | Significant at 0.05? |
 |---|---|---|---|---|
-| base 3B → 3B adapter (fine-tuning effect, 3B) | +6.7 pp | [−0.1, +13.4] pp | 0.125 | **No** |
-| base 7B → 7B adapter (fine-tuning effect, 7B) | +10.7 pp | [+1.9, +19.4] pp | 0.039 | Yes (marginal) |
-| base 3B → base 7B (size effect, no fine-tuning) | −5.3 pp | [−15.7, +5.1] pp | 0.455 | No |
-| 3B adapter → 7B adapter (size effect, with fine-tuning) | −1.3 pp | [−8.2, +5.6] pp | 1.000 | No |
+| base 3B → 3B adapter | +6.7 pp | [−0.1, +13.4] pp | 0.125 | No |
+| base 7B → 7B adapter | +10.7 pp | [+1.9, +19.4] pp | 0.039 | Yes (marginal) |
+| base 3B → base 7B | −5.3 pp | [−15.7, +5.1] pp | 0.455 | No |
+| 3B adapter → 7B adapter | −1.3 pp | [−8.2, +5.6] pp | 1.000 | No |
 
-**Honest read of these numbers, not a sales pitch:**
-- Fine-tuning has a positive effect on both model sizes, but is only statistically significant for 7B, and that result (p=0.039) is close enough to the 0.05 threshold with n=75 that it should be treated as suggestive, not conclusive.
-- The apparent fine-tuning benefit for 3B (p=0.125) is **not statistically significant** — don't claim it as proven, even though the point estimate and the FPR result both point the same direction.
-- Once fine-tuned, 3B and 7B perform statistically indistinguishably (Δ=−1.3pp, p=1.0). There is no evidence the larger base model produces a better adapter here.
-- All four CIs are wide. With test sets of 50–75 examples, these are directional findings, not tight estimates — do not over-interpret small point-estimate differences between rows.
+### Interpretation
 
-### False negative analysis (3B vs 7B adapters)
+- Fine-tuning moves accuracy up for both sizes. The change is significant only for 7B, and p=0.039 at n=75 is weak evidence.
+- The 3B improvement is not statistically significant.
+- After fine-tuning, 3B and 7B are statistically indistinguishable. This data gives no reason to prefer the larger base.
+- All confidence intervals are wide, so treat the numbers as directional.
+- Post-hoc, on the 25 legitimate emails in Test B: base 3B flagged 6 as phishing and the 3B adapter flagged none (exact McNemar p≈0.031). This subgroup was examined after the overall 3B test came out non-significant, and the p-value is not corrected for that.
 
-Manual review of the discordant pairs identified four false negatives, broken down as:
-- 1 case attributable to likely label noise in the source corpus.
-- 2 cases were near-duplicate templates already present in the training data (a deduplication gap between train and test).
-- 1 genuine miss: a Ledger hardware-wallet CVE-impersonation email neither adapter caught.
+### Error analysis
+
+From the table, the 3B adapter has 4 false negatives (1 in Test B, 3 in Test C) and the 7B adapter has 3 (all in Test C). Manual review of four false-negative cases found:
+
+- 1 case of likely label noise in the source corpus.
+- 2 near-duplicate templates that also appear in the training data, which points to a train/test deduplication gap.
+- 1 genuine miss: a Ledger hardware-wallet CVE-impersonation email that neither adapter caught.
 
 ### Calibration
 
-Confidence scores on incorrect verdicts were observed to run high in some cases — i.e. the models are not well calibrated, and confidence should not be treated as a reliable proxy for correctness. Downstream use should not threshold purely on `confidence_score` without independent calibration.
+Some wrong verdicts came with a high `confidence_score`, and the scores are uncalibrated. Calibrate before using `confidence_score` as a threshold. The field is confidence in the verdict, not P(phishing); for ROC/AUC use `conf if is_phishing else 1 − conf`.
 
-## Limitations
+## Quick start
 
-- **Test C has no legitimate-email examples** (0 of 25) — recall on Test C is measurable, but false-positive rate is not. The "pooled accuracy" figures above mix a balanced test set (Test B) with an unbalanced, phishing-only one (Test C); treat pooled accuracy as a composite metric, not a substitute for balanced accuracy.
-- Small external test sets (50–75 examples total) → wide confidence intervals on every comparison above. Do not generalize these exact percentages to production traffic.
-- Trained and evaluated on English-language emails only.
-- Not evaluated against adversarial or evasion-tuned phishing content.
-- Confidence scores are not well calibrated (see above).
-- Base model (Qwen2.5) license: listed as Apache 2.0 on the original Unsloth/HF model pages, but this has **not been independently re-verified** for this repo — confirm current licensing terms directly on Hugging Face before any commercial use.
+You need an NVIDIA GPU with CUDA, because the base models are 4-bit bitsandbytes checkpoints.
 
-## How to Get Started
-
-```python
-from unsloth import FastLanguageModel
-import torch, json
-
-# Choose one:
-BASE_MODEL = "unsloth/Qwen2.5-3B-Instruct-bnb-4bit"   # or "unsloth/Qwen2.5-7B-Instruct-bnb-4bit"
-ADAPTER_DIR = "3b-adapter"                              # or "7b-adapter"
-
-model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name=BASE_MODEL,
-    max_seq_length=2048,
-    load_in_4bit=True,
-)
-model.load_adapter(ADAPTER_DIR)
-FastLanguageModel.for_inference(model)
-
-messages = [
-    {
-        "role": "system",
-        "content": (
-            "You are an advanced AI security analyst specialized in email threat detection. "
-            "Analyze the provided email and respond with a JSON object containing: "
-            "is_phishing, confidence_score, threat_type, risk_level, indicators, "
-            "mitigation_recommendations, analysis_summary."
-        ),
-    },
-    {"role": "user", "content": "<email text here>"},
-]
-
-inputs = tokenizer.apply_chat_template(
-    messages, tokenize=True, add_generation_prompt=True, return_tensors="pt"
-).to(model.device)
-
-outputs = model.generate(inputs, max_new_tokens=500, do_sample=False)
-response = tokenizer.decode(outputs[0][inputs.shape[-1]:], skip_special_tokens=True)
-print(json.loads(response))
+```bash
+git clone https://github.com/kirilssw/Phishing-analyzer-LoRA.git
+cd Phishing-analyzer-LoRA
+pip install -r requirements.txt
+python inference.py --size 3b --file my_email.txt
 ```
 
-**Note:** the system prompt above is not baked into `chat_template.jinja` — it must be passed explicitly, for both adapters. Production use should parse the model's JSON output defensively (regex fallback for malformed fields), rather than assuming `json.loads()` will always succeed on greedy-decoded output.
+`my_email.txt` is a plain-text email with headers and body. The script prints the parsed JSON, or the raw output if the model returned invalid JSON.
 
-## Output Schema
+System prompt used in training and evaluation:
+
+```
+You are an advanced AI security analyst specialized in email threat detection. Analyze the provided email and respond with a JSON object containing: is_phishing, confidence_score, threat_type, risk_level, indicators, mitigation_recommendations, analysis_summary.
+```
+
+## Output schema
 
 ```json
 {
@@ -181,22 +156,41 @@ print(json.loads(response))
 }
 ```
 
-## Repository Contents
+Greedy decoding sometimes produces malformed JSON, such as a missing quote. Parse the output defensively.
 
-**Included:** adapter weights (3B and 7B), tokenizer files, chat template, this README, evaluation charts.
+## Limitations
 
-**Not included:**
-- Training notebooks / scripts
-- Evaluation harness (the paired McNemar comparison code)
-- Test sets B and C themselves
-- The synthetic BEC/invoice-fraud augmentation generator
-- `datasetv3_2048.jsonl` (training data) — not redistributed here; see Training Data section for the CEAS-08 source
+- The external test sets hold 75 emails in total, which gives wide confidence intervals. These percentages will not transfer to real traffic.
+- Test C contains no legitimate emails, so false-positive rate comes from the 25 legitimate emails in Test B alone. Pooled accuracy mixes a balanced set with a phishing-only one; the per-set metrics are more informative.
+- Training labels beyond ham/phish are LLM-generated (see Training data).
+- English only.
+- No evaluation against adversarial or evasion-tuned phishing.
+- Prompt injection is untested. The email body is untrusted input and may contain instructions aimed at the model.
+- Confidence scores are uncalibrated.
+- A train/test near-duplicate gap exists (see Error analysis).
+
+## Project history
+
+1. v1 (7B only): 1 epoch, context 1024. On a 50-example internal stratified set it detected link and attachment phishing and had 0% recall on invoice fraud and impersonation.
+2. v1.1: I chose the fix and measured it on the same 50 examples that exposed the problem, so its 0% → 100% jump is not used as a result anywhere in this README.
+3. v2 (current, 3B and 7B): context 2048, 2 epochs, augmented data, evaluated on external Test B and Test C as described above.
+
+## Not included
+
+- Training notebooks and the synthetic data generator
+- Evaluation harness
+- Test sets B and C, and `datasetv3_2048.jsonl`
+
+## Roadmap
+
+- Publish the evaluation harness (code only).
+- Expand Test C to 150–200 emails and add legitimate emails to it.
+- Deduplicate train and test at template level.
+- Build a prompt-injection test set.
+- Add a serving example (vLLM or llama.cpp with JSON-schema constrained decoding), published once the served model has been re-evaluated on Test B and Test C.
 
 ## License
 
-Adapters released under Apache 2.0. This inherits the base model's license terms — verify the current Qwen2.5 license on Hugging Face before commercial use (see Limitations). The CEAS-08 source dataset's own license was not independently re-verified for this repo; check the linked source before relying on it.
-
-## Framework Versions
-
-- PEFT 0.20.0
-- Trained via Unsloth
+- Code and the 7B adapter: Apache 2.0 (see `LICENSE`). The 7B base model [`Qwen/Qwen2.5-7B-Instruct`](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct) is Apache 2.0.
+- The 3B adapter is a derivative of [`Qwen/Qwen2.5-3B-Instruct`](https://huggingface.co/Qwen/Qwen2.5-3B-Instruct), released under the Qwen Research License Agreement. Use of the 3B adapter is subject to that license, which does not permit commercial use without separate permission. Read the license text before using it.
+- Evaluation corpora belong to their owners; Phishing Pot is CC BY-NC 4.0.
