@@ -8,3 +8,5 @@ venv/
 data/
 outputs/
 deployement/
+/inference.py
+/requirements.txt
